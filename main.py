@@ -1,17 +1,16 @@
 import os
-import asyncio
-from telethon import TelegramClient, events
-from telethon.tl.functions.channels import CreateChannelRequest, JoinChannelRequest
-from telethon.tl.functions.messages import ExportChatInviteRequest
-from telethon.errors import FloodWaitError
+from telethon.sync import TelegramClient
+from telethon.sessions import StringSession
 
-# Load credentials
-API_ID = int(os.environ['API_ID'])
-API_HASH = os.environ['API_HASH']
-PHONE = os.environ['PHONE_NUMBER']
+api_id = int(os.environ.get("API_ID"))
+api_hash = os.environ.get("API_HASH") 
 SOURCE_CHAT_ID = -1001552790071  # Your source group
 BACKUP_CHAT_ID = None  # Will be set after creation
 
+
+session_string = os.environ.get("SESSION_STRING")
+
+client = TelegramClient(StringSession(session_string), api_id, api_hash)
 # List of bot usernames to ignore
 BOTS_TO_IGNORE = [
     '@KPSLeech6Bot',
