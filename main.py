@@ -10,7 +10,7 @@ BACKUP_CHAT_ID = None  # Will be set after creation
 
 session_string = os.environ.get("SESSION_STRING")
 
-client = TelegramClient(StringSession(session_string), api_id, api_hash)
+client = TelegramClient('user_session', api_id, api_hash)
 # List of bot usernames to ignore
 BOTS_TO_IGNORE = [
     '@KPSLeech6Bot',
