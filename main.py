@@ -1,17 +1,23 @@
 import os
-from telethon.sync import TelegramClient
+from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.tl.functions.channels import CreateChannelRequest, JoinChannelRequest
+from telethon.tl.functions.messages import ExportChatInviteRequest
+from telethon.errors import FloodWaitError
 
+# Environment variables
 api_id = int(os.environ.get("API_ID"))
-api_hash = os.environ.get("API_HASH") 
-SOURCE_CHAT_ID = -1001552790071  # Your source group
-BACKUP_CHAT_ID = None  # Will be set after creation
-
-
+api_hash = os.environ.get("API_HASH")
 session_string = os.environ.get("SESSION_STRING")
 
-client = TelegramClient('user_session', api_id, api_hash)
-# List of bot usernames to ignore
+# Source and backup chat settings
+SOURCE_CHAT_ID = -1001552790071  # Replace with your group/channel ID
+BACKUP_CHAT_ID = None  # Will be set automatically
+
+# Create client
+client = TelegramClient(StringSession(session_string), api_id, api_hash)
+
+# List of bots to ignore
 BOTS_TO_IGNORE = [
     '@KPSLeech6Bot',
     '@KPSLeech5Bot',
@@ -23,12 +29,9 @@ BOTS_TO_IGNORE = [
     '@KPSLeechBot'
 ]
 
-client = TelegramClient('user_session', API_ID, API_HASH)
-
 async def create_backup_channel():
-    """Creates a new backup channel with guaranteed visibility"""
+    """Creates a new backup channel (supergroup)"""
     try:
-        # Create a new supergroup (not broadcast channel)
         created = await client(CreateChannelRequest(
             title="💾 Message Backup Channel",
             about="Automatically created for message backups",
@@ -39,14 +42,12 @@ async def create_backup_channel():
         new_chat_id = created.chats[0].id
         print(f"✅ Backup channel created (ID: {new_chat_id})")
 
-        # Generate permanent invite link
         try:
             invite = await client(ExportChatInviteRequest(peer=new_chat_id))
             print(f"🔗 Permanent invite link: {invite.link}")
         except Exception as e:
             print(f"⚠️ Couldn't create invite link: {str(e)}")
 
-        # Force-join the channel to make it visible
         await client(JoinChannelRequest(channel=new_chat_id))
         print("👀 Channel joined successfully")
 
@@ -60,16 +61,13 @@ async def create_backup_channel():
         return None
 
 async def setup_backup_chat():
-    """Handles the complete backup channel setup"""
-    # Try creating a new channel
+    """Handles the backup chat setup"""
     new_chat_id = await create_backup_channel()
     if new_chat_id:
         return new_chat_id
 
-    # If creation failed, try fallback options
     print("\n🔄 Trying fallback solutions...")
 
-    # Option 1: Try joining an existing channel
     try:
         if BACKUP_CHAT_ID:
             await client(JoinChannelRequest(channel=BACKUP_CHAT_ID))
@@ -78,7 +76,6 @@ async def setup_backup_chat():
     except Exception as e:
         print(f"⚠️ Couldn't join existing channel: {str(e)}")
 
-    # Option 2: Create a basic group instead
     try:
         print("Attempting to create basic group...")
         async with client.conversation('me') as conv:
@@ -87,7 +84,6 @@ async def setup_backup_chat():
             await conv.send_message('Message Backup Group')
             await conv.get_response()
             print("✅ Basic group created")
-            # You'll need to manually get the group ID here
             return None
     except Exception as e:
         print(f"❌ Basic group creation failed: {str(e)}")
@@ -99,10 +95,8 @@ async def message_handler(event):
         return
 
     try:
-        # Get sender info
         sender = await event.get_sender()
 
-        # Check if the sender is a bot (ignore if true)
         if sender.bot:
             print(f"🤖 Ignoring message from bot: {sender.username}")
             return
@@ -113,7 +107,6 @@ async def message_handler(event):
         if getattr(sender, 'username', ''):
             name += f" (@{sender.username})"
 
-        # Forward message
         if event.text:
             await client.send_message(
                 entity=BACKUP_CHAT_ID,
@@ -129,9 +122,8 @@ async def message_handler(event):
         print(f"🚫 Forward error: {str(e)}")
 
 async def main():
-    await client.start(phone=PHONE)
+    await client.start()
 
-    # Verify source access
     try:
         await client.get_entity(SOURCE_CHAT_ID)
         print("✅ Source chat verified")
@@ -139,7 +131,6 @@ async def main():
         print(f"❌ Source chat error: {str(e)}")
         return
 
-    # Setup backup channel
     global BACKUP_CHAT_ID
     BACKUP_CHAT_ID = await setup_backup_chat()
     if not BACKUP_CHAT_ID:
