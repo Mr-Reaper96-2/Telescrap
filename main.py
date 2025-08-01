@@ -1,23 +1,32 @@
 import os
+import asyncio
+from fastapi import FastAPI
+import uvicorn
+from threading import Thread
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import CreateChannelRequest, JoinChannelRequest
 from telethon.tl.functions.messages import ExportChatInviteRequest
 from telethon.errors import FloodWaitError
+from datetime import datetime
 
 # Environment variables
 api_id = int(os.environ.get("API_ID"))
 api_hash = os.environ.get("API_HASH")
 session_string = os.environ.get("SESSION_STRING")
+PORT = int(os.environ.get("PORT", 8000))
 
 # Source and backup chat settings
-SOURCE_CHAT_ID = -1001552790071  # Replace with your group/channel ID
-BACKUP_CHAT_ID = None  # Will be set automatically
+SOURCE_CHAT_ID = -1001552790071
+BACKUP_CHAT_ID = None
 
-# Create client
-client = TelegramClient(StringSession(session_string), api_id, api_hash)
+# Create FastAPI app
+app = FastAPI()
 
-# List of bots to ignore
+@app.get("/")
+async def health_check():
+    return {"status": "alive", "message": "Telegram backup bot is running"}
+
 BOTS_TO_IGNORE = [
     '@KPSLeech6Bot',
     '@KPSLeech5Bot',
@@ -29,18 +38,38 @@ BOTS_TO_IGNORE = [
     '@KPSLeechBot'
 ]
 
-async def create_backup_channel():
-    """Creates a new backup channel (supergroup)"""
+async def get_next_channel_number():
+    """Find the next available channel number by checking existing dialogs"""
     try:
+        max_num = 0
+        async for dialog in client.iter_dialogs():
+            if dialog.name.startswith("💾 Backup #"):
+                try:
+                    current_num = int(dialog.name.split('#')[1].split()[0])
+                    max_num = max(max_num, current_num)
+                except (IndexError, ValueError):
+                    continue
+        return max_num + 1
+    except Exception as e:
+        print(f"⚠️ Error checking existing channels: {str(e)}")
+        return 1  # Fallback to 1 if there's an error
+
+async def create_backup_channel():
+    """Creates a new backup channel with serial number"""
+    try:
+        channel_num = await get_next_channel_number()
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+        title = f"💾 Backup #{channel_num} ({timestamp})"
+        
         created = await client(CreateChannelRequest(
-            title="💾 Message Backup Channel",
-            about="Automatically created for message backups",
+            title=title,
+            about=f"Automatically created backup channel #{channel_num}",
             megagroup=True,
             broadcast=False
         ))
 
         new_chat_id = created.chats[0].id
-        print(f"✅ Backup channel created (ID: {new_chat_id})")
+        print(f"✅ Backup channel created (ID: {new_chat_id}) - {title}")
 
         try:
             invite = await client(ExportChatInviteRequest(peer=new_chat_id))
@@ -62,32 +91,28 @@ async def create_backup_channel():
 
 async def setup_backup_chat():
     """Handles the backup chat setup"""
-    new_chat_id = await create_backup_channel()
-    if new_chat_id:
-        return new_chat_id
-
-    print("\n🔄 Trying fallback solutions...")
-
+    # First try to find the most recent backup channel
     try:
-        if BACKUP_CHAT_ID:
-            await client(JoinChannelRequest(channel=BACKUP_CHAT_ID))
-            print(f"✅ Joined existing backup channel (ID: {BACKUP_CHAT_ID})")
-            return BACKUP_CHAT_ID
+        latest_channel = None
+        latest_num = 0
+        async for dialog in client.iter_dialogs():
+            if dialog.name.startswith("💾 Backup #"):
+                try:
+                    current_num = int(dialog.name.split('#')[1].split()[0])
+                    if current_num > latest_num:
+                        latest_num = current_num
+                        latest_channel = dialog.entity
+                except (IndexError, ValueError):
+                    continue
+        
+        if latest_channel:
+            print(f"🔍 Found existing backup channel: {latest_channel.title}")
+            return latest_channel.id
     except Exception as e:
-        print(f"⚠️ Couldn't join existing channel: {str(e)}")
+        print(f"⚠️ Error searching existing channels: {str(e)}")
 
-    try:
-        print("Attempting to create basic group...")
-        async with client.conversation('me') as conv:
-            await conv.send_message('/newgroup')
-            await conv.get_response()
-            await conv.send_message('Message Backup Group')
-            await conv.get_response()
-            print("✅ Basic group created")
-            return None
-    except Exception as e:
-        print(f"❌ Basic group creation failed: {str(e)}")
-        return None
+    # If no existing channel found, create a new one
+    return await create_backup_channel()
 
 @client.on(events.NewMessage(chats=SOURCE_CHAT_ID))
 async def message_handler(event):
@@ -97,8 +122,8 @@ async def message_handler(event):
     try:
         sender = await event.get_sender()
 
-        if sender.bot:
-            print(f"🤖 Ignoring message from bot: {sender.username}")
+        if sender.bot or (hasattr(sender, 'username') and sender.username in BOTS_TO_IGNORE):
+            print(f"🤖 Ignoring message from bot: {getattr(sender, 'username', 'unknown')}")
             return
 
         name = getattr(sender, 'first_name', 'Unknown')
@@ -121,7 +146,7 @@ async def message_handler(event):
     except Exception as e:
         print(f"🚫 Forward error: {str(e)}")
 
-async def main():
+async def start_bot():
     await client.start()
 
     try:
@@ -135,14 +160,18 @@ async def main():
     BACKUP_CHAT_ID = await setup_backup_chat()
     if not BACKUP_CHAT_ID:
         print("💀 Failed to establish backup channel")
-        print("\n🔧 Manual solution:")
-        print("1. Create a channel manually")
-        print("2. Add your bot as admin")
-        print("3. Set BACKUP_CHAT_ID to its ID (-100 prefix)")
         return
 
     print(f"\n🟢 Ready! Monitoring {SOURCE_CHAT_ID} → {BACKUP_CHAT_ID}")
     await client.run_until_disconnected()
 
+def run_fastapi():
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
+
 if __name__ == '__main__':
-    client.loop.run_until_complete(main())
+    client = TelegramClient(StringSession(session_string), api_id, api_hash)
+    
+    server_thread = Thread(target=run_fastapi, daemon=True)
+    server_thread.start()
+    
+    client.loop.run_until_complete(start_bot())
